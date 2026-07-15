@@ -1,0 +1,29 @@
+@startuml
+title <size:24>Dynamic View: Corpus Hub</size>\n<size:24>An agent searches the corpus (works even when big boi is offline).</size>
+
+set separator none
+
+<style>
+  root {
+    BackgroundColor: #ffffff
+    FontColor: #444444
+  }
+</style>
+
+!include <C4/C4_Sequence>
+
+System(AIAgents, "AI Agents", $descr="Claude Code, Codex, local LLM agents — consume the corpus over MCP.", $tags="", $link="")
+Container(CorpusHub.MCPServer, "MCP Server", $techn="Python MCP SDK / FastMCP", $descr="corpus_search / corpus_get / corpus_list.", $tags="", $link="")
+Container(CorpusHub.QueryEncoder, "Query Encoder", $techn="bge-m3 ONNX (CPU)", $descr="Encodes queries in the SAME vector space as documents.", $tags="", $link="")
+ContainerDb(CorpusHub.VectorFTSIndex, "Vector + FTS Index", $techn="LanceDB", $descr="Hybrid BM25 + vector; cited chunks.", $tags="", $link="")
+ContainerDb(CorpusHub.LibraryPlaintext, "Library + Plaintext", $techn="Filesystem / Calibre", $descr="L1 canonical files + L2 normalized markdown.", $tags="", $link="")
+
+Rel(AIAgents, CorpusHub.MCPServer, "1: corpus_search(query, domain?)", $techn="MCP", $tags="", $link="")
+Rel(CorpusHub.MCPServer, CorpusHub.QueryEncoder, "2: Encode query (same vector space)", $techn="", $tags="", $link="")
+Rel(CorpusHub.MCPServer, CorpusHub.VectorFTSIndex, "3: Hybrid search (BM25 + vector)", $techn="", $tags="", $link="")
+Rel(CorpusHub.MCPServer, CorpusHub.LibraryPlaintext, "4: Fetch full sections (if needed)", $techn="", $tags="", $link="")
+Rel(CorpusHub.MCPServer, AIAgents, "5: Cited, scored snippets (doc + page)", $techn="MCP", $tags="", $link="")
+
+SHOW_LEGEND(true)
+hide stereotypes
+@enduml

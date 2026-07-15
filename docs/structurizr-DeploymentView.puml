@@ -1,0 +1,53 @@
+@startuml
+title <size:24>Deployment View: Corpus Hub - Production</size>
+
+set separator none
+left to right direction
+
+<style>
+  root {
+    BackgroundColor: #ffffff
+    FontColor: #444444
+  }
+</style>
+
+!include <C4/C4>
+!include <C4/C4_Context>
+!include <C4/C4_Container>
+!include <C4/C4_Deployment>
+
+Deployment_Node(Production.RaspberryPi5, "Raspberry Pi 5", $type="Raspberry Pi OS (arm64), 16GB, NVMe", $descr="Always-on hub", $tags="", $link="") {
+  Container(Production.RaspberryPi5.UploadAPI_1, "Upload API", $techn="FastAPI / Uvicorn", $descr="Accepts docs, hashes them, files a job.", $tags="", $link="")
+  Container(Production.RaspberryPi5.JobDispatcher_1, "Job Dispatcher", $techn="Python asyncio", $descr="Lease-based queue + atomic merge; owns the job state machine.", $tags="", $link="")
+  Container(Production.RaspberryPi5.QueryEncoder_1, "Query Encoder", $techn="bge-m3 ONNX (CPU)", $descr="Encodes queries in the SAME vector space as documents.", $tags="", $link="")
+  Container(Production.RaspberryPi5.MCPServer_1, "MCP Server", $techn="Python MCP SDK / FastMCP", $descr="corpus_search / corpus_get / corpus_list.", $tags="", $link="")
+  ContainerDb(Production.RaspberryPi5.CatalogJobQueue_1, "Catalog + Job Queue", $techn="SQLite", $descr="Doc registry, content hashes, lease-based job states.", $tags="", $link="")
+  ContainerDb(Production.RaspberryPi5.VectorFTSIndex_1, "Vector + FTS Index", $techn="LanceDB", $descr="Hybrid BM25 + vector; cited chunks.", $tags="", $link="")
+  ContainerDb(Production.RaspberryPi5.LibraryPlaintext_1, "Library + Plaintext", $techn="Filesystem / Calibre", $descr="L1 canonical files + L2 normalized markdown.", $tags="", $link="")
+}
+
+Deployment_Node(Production.Workstationbigboi, "Workstation 'big boi'", $type="Pop!_OS 24.04, Ryzen 9800X3D, RTX 5080", $descr="Intermittent GPU worker", $tags="", $link="") {
+  Container(Production.Workstationbigboi.IngestWorker_1, "Ingest Worker", $techn="Python asyncio", $descr="Polls the Pi, leases jobs, orchestrates L2+L3, returns a bundle.", $tags="", $link="")
+  Container(Production.Workstationbigboi.Extractor_1, "Extractor", $techn="marker-pdf / pymupdf / pandoc", $descr="Raw doc to normalized markdown.", $tags="", $link="")
+  Container(Production.Workstationbigboi.Classifier_1, "Classifier", $techn="centroid / Qwen2.5-3B (llama.cpp)", $descr="Assigns domain + tags.", $tags="", $link="")
+  Container(Production.Workstationbigboi.Embedder_1, "Embedder", $techn="bge-m3 + CUDA", $descr="Chunks to vectors (the heavy lift).", $tags="", $link="")
+}
+
+Rel(Production.RaspberryPi5.MCPServer_1, Production.RaspberryPi5.QueryEncoder_1, "Encode query", $techn="", $tags="", $link="")
+Rel(Production.RaspberryPi5.UploadAPI_1, Production.RaspberryPi5.CatalogJobQueue_1, "Creates job (QUEUED)", $techn="", $tags="", $link="")
+Rel(Production.RaspberryPi5.JobDispatcher_1, Production.RaspberryPi5.CatalogJobQueue_1, "Polls / updates job state", $techn="", $tags="", $link="")
+Rel(Production.RaspberryPi5.MCPServer_1, Production.RaspberryPi5.CatalogJobQueue_1, "List / metadata lookups", $techn="", $tags="", $link="")
+Rel(Production.RaspberryPi5.JobDispatcher_1, Production.RaspberryPi5.VectorFTSIndex_1, "Merges index.parquet", $techn="", $tags="", $link="")
+Rel(Production.RaspberryPi5.MCPServer_1, Production.RaspberryPi5.VectorFTSIndex_1, "Hybrid search", $techn="", $tags="", $link="")
+Rel(Production.RaspberryPi5.UploadAPI_1, Production.RaspberryPi5.LibraryPlaintext_1, "Stores canonical file", $techn="", $tags="", $link="")
+Rel(Production.RaspberryPi5.JobDispatcher_1, Production.RaspberryPi5.LibraryPlaintext_1, "Writes plaintext.md", $techn="", $tags="", $link="")
+Rel(Production.RaspberryPi5.MCPServer_1, Production.RaspberryPi5.LibraryPlaintext_1, "Fetch full sections", $techn="", $tags="", $link="")
+Rel(Production.Workstationbigboi.IngestWorker_1, Production.RaspberryPi5.JobDispatcher_1, "Leases job (GET /jobs/next), heartbeats", $techn="HTTP poll", $tags="", $link="")
+Rel(Production.Workstationbigboi.IngestWorker_1, Production.RaspberryPi5.JobDispatcher_1, "Returns ingest bundle (POST /jobs/{id}/result)", $techn="HTTP", $tags="", $link="")
+Rel(Production.Workstationbigboi.IngestWorker_1, Production.Workstationbigboi.Extractor_1, "L2 extract", $techn="", $tags="", $link="")
+Rel(Production.Workstationbigboi.IngestWorker_1, Production.Workstationbigboi.Classifier_1, "Classify", $techn="", $tags="", $link="")
+Rel(Production.Workstationbigboi.IngestWorker_1, Production.Workstationbigboi.Embedder_1, "L3 embed", $techn="", $tags="", $link="")
+
+SHOW_LEGEND(true)
+hide stereotypes
+@enduml

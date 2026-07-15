@@ -1,0 +1,79 @@
+@startuml
+title Corpus Hub — Ingest Sequence (behavioral: polling, online/offline, leasing)
+
+skinparam backgroundColor #ffffff
+skinparam sequenceMessageAlign center
+skinparam maxMessageSize 220
+skinparam BoxPadding 12
+
+actor Jeff as jeff
+
+box "Raspberry Pi 5 — always on" #E8F1FB
+    participant "Upload API" as api
+    participant "Job Dispatcher" as disp
+    database "Catalog\n(SQLite)" as cat
+    database "Library +\nPlaintext" as lib
+    database "LanceDB" as lance
+end box
+
+box "big boi — RTX 5080, intermittent" #FBEEE8
+    participant "Ingest Worker" as worker
+    participant "Extractor /\nClassifier /\nEmbedder" as pipe
+end box
+
+== Upload (synchronous, always available) ==
+jeff -> api : POST /documents (file)
+activate api
+api -> api : sha256(file)
+api -> lib : store canonical file (L1)
+api -> cat : INSERT job (QUEUED)
+api --> jeff : 202 { job_id, status: QUEUED }
+deactivate api
+
+note over jeff, lance
+  Upload never blocks on big boi. If the worker is asleep,
+  the job simply waits in QUEUED — Jeff sees "🛰️ waiting to connect".
+end note
+
+== Worker poll loop (big boi drives the connection) ==
+loop every ~10s while awake
+    worker -> disp : GET /jobs/next
+    activate disp
+
+    alt a QUEUED job exists
+        disp -> cat : lease job (status=LEASED, lease_expires_at)
+        disp --> worker : 200 { job, source_url }
+        deactivate disp
+
+        activate worker
+        worker -> disp : GET source file
+        worker -> pipe : extract → classify → chunk → embed (L2+L3)
+        activate pipe
+        pipe --> worker : ingest bundle\n(manifest + plaintext.md + index.parquet)
+        deactivate pipe
+
+        worker -> disp : POST /jobs/{id}/result (bundle)
+        deactivate worker
+        activate disp
+
+        note right of disp : Pi is the SINGLE WRITER —\nmerge is atomic
+        disp -> lib   : write plaintext.md (L2)
+        disp -> lance : merge index.parquet (L3)
+        disp -> cat   : UPDATE job → COMPLETED
+        disp --> worker : 200 OK
+        deactivate disp
+
+    else queue empty
+        disp --> worker : 204 No Content
+        deactivate disp
+    end
+end
+
+== Crash safety (no message — time passes) ==
+note over disp, cat
+  If a worker dies mid-job, its lease_expires_at passes.
+  A sweep flips the job LEASED → QUEUED; next poll re-leases it.
+  content_sha256 makes reprocessing idempotent.
+end note
+
+@enduml

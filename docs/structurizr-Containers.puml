@@ -1,0 +1,62 @@
+@startuml
+title <size:24>Container View: Corpus Hub</size>
+
+set separator none
+left to right direction
+
+<style>
+  root {
+    BackgroundColor: #ffffff
+    FontColor: #444444
+  }
+</style>
+
+!include <C4/C4>
+!include <C4/C4_Context>
+!include <C4/C4_Container>
+
+Person(Jeff, "Jeff", $descr="Uploads documents to the corpus.", $tags="", $link="")
+System(AIAgents, "AI Agents", $descr="Claude Code, Codex, local LLM agents — consume the corpus over MCP.", $tags="", $link="")
+
+System_Boundary("CorpusHub_boundary", "Corpus Hub", $tags="") {
+  AddBoundaryTag("Raspberry Pi 5 — always on (state owner + L4)", $borderColor="#cccccc", $fontColor="#cccccc", $borderStyle="dashed")
+  Boundary(group_1, "Raspberry Pi 5 — always on (state owner + L4)", $tags="Raspberry Pi 5 — always on (state owner + L4)") {
+    ContainerDb(CorpusHub.LibraryPlaintext, "Library + Plaintext", $techn="Filesystem / Calibre", $descr="L1 canonical files + L2 normalized markdown.", $tags="", $link="")
+    Container(CorpusHub.UploadAPI, "Upload API", $techn="FastAPI / Uvicorn", $descr="Accepts docs, hashes them, files a job.", $tags="", $link="")
+    Container(CorpusHub.JobDispatcher, "Job Dispatcher", $techn="Python asyncio", $descr="Lease-based queue + atomic merge; owns the job state machine.", $tags="", $link="")
+    Container(CorpusHub.QueryEncoder, "Query Encoder", $techn="bge-m3 ONNX (CPU)", $descr="Encodes queries in the SAME vector space as documents.", $tags="", $link="")
+    Container(CorpusHub.MCPServer, "MCP Server", $techn="Python MCP SDK / FastMCP", $descr="corpus_search / corpus_get / corpus_list.", $tags="", $link="")
+    ContainerDb(CorpusHub.CatalogJobQueue, "Catalog + Job Queue", $techn="SQLite", $descr="Doc registry, content hashes, lease-based job states.", $tags="", $link="")
+    ContainerDb(CorpusHub.VectorFTSIndex, "Vector + FTS Index", $techn="LanceDB", $descr="Hybrid BM25 + vector; cited chunks.", $tags="", $link="")
+  }
+
+  AddBoundaryTag("Workstation 'big boi' — RTX 5080, intermittent (stateless muscle)", $borderColor="#cccccc", $fontColor="#cccccc", $borderStyle="dashed")
+  Boundary(group_2, "Workstation 'big boi' — RTX 5080, intermittent (stateless muscle)", $tags="Workstation 'big boi' — RTX 5080, intermittent (stateless muscle)") {
+    Container(CorpusHub.IngestWorker, "Ingest Worker", $techn="Python asyncio", $descr="Polls the Pi, leases jobs, orchestrates L2+L3, returns a bundle.", $tags="", $link="")
+    Container(CorpusHub.Extractor, "Extractor", $techn="marker-pdf / pymupdf / pandoc", $descr="Raw doc to normalized markdown.", $tags="", $link="")
+    Container(CorpusHub.Classifier, "Classifier", $techn="centroid / Qwen2.5-3B (llama.cpp)", $descr="Assigns domain + tags.", $tags="", $link="")
+    Container(CorpusHub.Embedder, "Embedder", $techn="bge-m3 + CUDA", $descr="Chunks to vectors (the heavy lift).", $tags="", $link="")
+  }
+
+}
+
+Rel(Jeff, CorpusHub.UploadAPI, "Uploads docs", $techn="HTTPS / scp", $tags="", $link="")
+Rel(AIAgents, CorpusHub.MCPServer, "Queries corpus", $techn="MCP", $tags="", $link="")
+Rel(CorpusHub.UploadAPI, CorpusHub.LibraryPlaintext, "Stores canonical file", $techn="", $tags="", $link="")
+Rel(CorpusHub.UploadAPI, CorpusHub.CatalogJobQueue, "Creates job (QUEUED)", $techn="", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.JobDispatcher, "Leases job (GET /jobs/next), heartbeats", $techn="HTTP poll", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.JobDispatcher, "Returns ingest bundle (POST /jobs/{id}/result)", $techn="HTTP", $tags="", $link="")
+Rel(CorpusHub.JobDispatcher, CorpusHub.CatalogJobQueue, "Polls / updates job state", $techn="", $tags="", $link="")
+Rel(CorpusHub.JobDispatcher, CorpusHub.LibraryPlaintext, "Writes plaintext.md", $techn="", $tags="", $link="")
+Rel(CorpusHub.JobDispatcher, CorpusHub.VectorFTSIndex, "Merges index.parquet", $techn="", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.Extractor, "L2 extract", $techn="", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.Classifier, "Classify", $techn="", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.Embedder, "L3 embed", $techn="", $tags="", $link="")
+Rel(CorpusHub.MCPServer, CorpusHub.QueryEncoder, "Encode query", $techn="", $tags="", $link="")
+Rel(CorpusHub.MCPServer, CorpusHub.VectorFTSIndex, "Hybrid search", $techn="", $tags="", $link="")
+Rel(CorpusHub.MCPServer, CorpusHub.CatalogJobQueue, "List / metadata lookups", $techn="", $tags="", $link="")
+Rel(CorpusHub.MCPServer, CorpusHub.LibraryPlaintext, "Fetch full sections", $techn="", $tags="", $link="")
+
+SHOW_LEGEND(true)
+hide stereotypes
+@enduml

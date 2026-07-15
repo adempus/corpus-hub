@@ -1,0 +1,41 @@
+@startuml
+title <size:24>Dynamic View: Corpus Hub</size>\n<size:24>Happy-path: a document from upload to searchable (big boi online).</size>
+
+set separator none
+
+<style>
+  root {
+    BackgroundColor: #ffffff
+    FontColor: #444444
+  }
+</style>
+
+!include <C4/C4_Sequence>
+
+Person(Jeff, "Jeff", $descr="Uploads documents to the corpus.", $tags="", $link="")
+Container(CorpusHub.UploadAPI, "Upload API", $techn="FastAPI / Uvicorn", $descr="Accepts docs, hashes them, files a job.", $tags="", $link="")
+ContainerDb(CorpusHub.LibraryPlaintext, "Library + Plaintext", $techn="Filesystem / Calibre", $descr="L1 canonical files + L2 normalized markdown.", $tags="", $link="")
+ContainerDb(CorpusHub.CatalogJobQueue, "Catalog + Job Queue", $techn="SQLite", $descr="Doc registry, content hashes, lease-based job states.", $tags="", $link="")
+Container(CorpusHub.IngestWorker, "Ingest Worker", $techn="Python asyncio", $descr="Polls the Pi, leases jobs, orchestrates L2+L3, returns a bundle.", $tags="", $link="")
+Container(CorpusHub.JobDispatcher, "Job Dispatcher", $techn="Python asyncio", $descr="Lease-based queue + atomic merge; owns the job state machine.", $tags="", $link="")
+Container(CorpusHub.Extractor, "Extractor", $techn="marker-pdf / pymupdf / pandoc", $descr="Raw doc to normalized markdown.", $tags="", $link="")
+Container(CorpusHub.Classifier, "Classifier", $techn="centroid / Qwen2.5-3B (llama.cpp)", $descr="Assigns domain + tags.", $tags="", $link="")
+Container(CorpusHub.Embedder, "Embedder", $techn="bge-m3 + CUDA", $descr="Chunks to vectors (the heavy lift).", $tags="", $link="")
+ContainerDb(CorpusHub.VectorFTSIndex, "Vector + FTS Index", $techn="LanceDB", $descr="Hybrid BM25 + vector; cited chunks.", $tags="", $link="")
+
+Rel(Jeff, CorpusHub.UploadAPI, "1: Uploads a document (HTTPS / scp)", $techn="HTTPS / scp", $tags="", $link="")
+Rel(CorpusHub.UploadAPI, CorpusHub.LibraryPlaintext, "2: Stores canonical file (L1)", $techn="", $tags="", $link="")
+Rel(CorpusHub.UploadAPI, CorpusHub.CatalogJobQueue, "3: Creates job (QUEUED)", $techn="", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.JobDispatcher, "4: Leases next job (GET /jobs/next)", $techn="HTTP poll", $tags="", $link="")
+Rel(CorpusHub.JobDispatcher, CorpusHub.CatalogJobQueue, "5: Marks job LEASED (+ lease expiry)", $techn="", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.Extractor, "6: Extract to markdown (L2)", $techn="", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.Classifier, "7: Classify domain + tags", $techn="", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.Embedder, "8: Embed chunks on CUDA (L3)", $techn="", $tags="", $link="")
+Rel(CorpusHub.IngestWorker, CorpusHub.JobDispatcher, "9: Returns ingest bundle (POST /jobs/{id}/result)", $techn="HTTP", $tags="", $link="")
+Rel(CorpusHub.JobDispatcher, CorpusHub.LibraryPlaintext, "10: Writes plaintext.md (L2)", $techn="", $tags="", $link="")
+Rel(CorpusHub.JobDispatcher, CorpusHub.VectorFTSIndex, "11: Merges index.parquet (L3)", $techn="", $tags="", $link="")
+Rel(CorpusHub.JobDispatcher, CorpusHub.CatalogJobQueue, "12: Marks job COMPLETED", $techn="", $tags="", $link="")
+
+SHOW_LEGEND(true)
+hide stereotypes
+@enduml

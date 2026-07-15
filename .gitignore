@@ -1,0 +1,34 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Env / secrets (secrets live in Doppler, never here)
+.env
+.doppler.yaml
+err.log
+
+# Data (canonical library, plaintext, indexes, catalog)
+data/
+*.lance/
+*.db
+*.db-wal
+*.db-shm
+
+# Models cache
+models/
+
+# Diagram render scratch (sources + committed PNG/SVG are kept)
+docs/cli/
+docs/cli.zip
+docs/export.log
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

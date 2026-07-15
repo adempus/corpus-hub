@@ -1,0 +1,26 @@
+@startuml
+title <size:24>System Context View: Corpus Hub</size>
+
+set separator none
+left to right direction
+
+<style>
+  root {
+    BackgroundColor: #ffffff
+    FontColor: #444444
+  }
+</style>
+
+!include <C4/C4>
+!include <C4/C4_Context>
+
+Person(Jeff, "Jeff", $descr="Uploads documents to the corpus.", $tags="", $link="")
+System(AIAgents, "AI Agents", $descr="Claude Code, Codex, local LLM agents — consume the corpus over MCP.", $tags="", $link="")
+System(CorpusHub, "Corpus Hub", $descr="Private, AI-searchable library over a mixed ebook/article corpus.", $tags="", $link="")
+
+Rel(Jeff, CorpusHub, "Uploads docs", $techn="HTTPS / scp", $tags="", $link="")
+Rel(AIAgents, CorpusHub, "Queries corpus", $techn="MCP", $tags="", $link="")
+
+SHOW_LEGEND(true)
+hide stereotypes
+@enduml
