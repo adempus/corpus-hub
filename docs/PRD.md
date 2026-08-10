@@ -141,6 +141,27 @@ See [`docs/`](.) for the full C4 set (context, container, deployment, ingest & q
 
 **Explicitly not buying:** Hailo AI module (vision NPU — wrong accelerator class for a text/transformer workload).
 
+### 10.1 Storage & HAT decision
+
+The Pi hub is a **database box** (LanceDB + SQLite): its work is lots of *small random reads*, not big sequential transfers, and it runs 24/7. That shapes every storage choice below — and most of these calls are counterintuitive, so they're written down to avoid being re-litigated later.
+
+**PCIe-lane ceiling (the key constraint):** the Pi 5 exposes a **single PCIe lane** → ~450 MB/s (Gen2 default) or ~900 MB/s (Gen3, forced in config). This caps *any* NVMe drive. A 7,000 MB/s Gen4 drive gets throttled to ~900 — you'd pay for speed the hardware physically cannot use.
+
+**SSD choice — buy boring, not fast:**
+- **PCIe Gen3 is plenty** (you're capped at ~900 MB/s regardless) — cheaper, cooler, lower power.
+- **TLC NAND, not QLC** — more durable and more consistent under the mixed read/write of ingest merges.
+- **DRAM cache preferred** — DRAM-less (HMB) drives are flakier/slower for random ops on the Pi 5.
+- **Low idle/active power** — every watt competes with the Pi's power budget and adds heat on an always-on box.
+- **Optimize for 4K random-read IOPS**, not sequential throughput — that's what the index/DB actually does.
+- **1TB** sweet spot (vectors are tiny — ~1.6GB per 1,000 books — so 1TB is roomy headroom).
+- **Picks:** WD Blue SN580 (2280, TLC, cool, low-power, heavily Pi-tested — default) or Samsung 970 EVO Plus (Gen3 + real DRAM cache — most spec-matched to the Pi's ceiling). Avoid QLC bargain drives and controller-swapping SKUs (e.g. Kingston NV2).
+
+**HAT choice — reputable third-party, single-slot, no PoE:** Third-party NVMe bases (Geekworm, Pineboards, Pimoroni, GeeekPi) are fine and often better-featured than the official HAT — just buy a *named brand* with clean 5V power delivery (sketchy boards can brown out the NVMe and corrupt DB writes). **Selected: Geekworm X1001.**
+- **Single PCIe lane** makes dual-slot boards pointless here (both drives would *share* one lane via a switch chip — more power, more failure points, no bandwidth gain).
+- **Rejected the GeeekPi P33** specifically for its **PoE+**: unused (we power from the wall) and an active liability — PoE on a Pi 5 with NVMe often can't deliver the full 5V/5A, triggering firmware current-limiting = the exact brownout risk we're avoiding. Extra heat and components on a box whose job is reliability.
+- The X1001 is a focused, well-supported PCIe-to-M.2 adapter powered cleanly off the Pi's rail. One verification: ensure standoff height clears the active cooler's fan.
+- **Power stays the official 27W (5V/5A) USB-C supply regardless of HAT** — into its own wall outlet, never the workstation.
+
 ## 11. Milestones (phased)
 
 1. **Foundation** — repo, shared contract package, role-aware Makefile + compose, Doppler bootstrap.
