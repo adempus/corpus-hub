@@ -169,7 +169,10 @@ from pydantic import BaseModel
 CHUNK_SCHEMA = ["chunk_id","doc_id","seq","text","heading_path",
                 "page_start","page_end","token_count","vector"]
 
+BUNDLE_SCHEMA_VERSION = "1"   # bump when CHUNK_SCHEMA or Manifest shape changes
+
 class Manifest(BaseModel):
+    schema_version: str = BUNDLE_SCHEMA_VERSION   # versions the BUNDLE FORMAT (gap #2)
     doc_id: str
     content_sha256: str
     source_filename: str
@@ -177,8 +180,8 @@ class Manifest(BaseModel):
     author: str | None = None
     year: int | None = None
     domain: str
-    domain_confidence: float | None = None
-    tags: list[str] = []
+    domain_confidence: float | None = None        # FR5 confidence (gap #1); canonical name
+    tags: list[str] = []                           # FR5 tags (gap #1); doc-level canonical
     page_count: int | None = None
     chunk_count: int
     embed_model: str
@@ -186,7 +189,7 @@ class Manifest(BaseModel):
     chunker_version: str = "v1"
     extractor: str | None = None
     worker_host: str | None = None
-    pipeline_version: str
+    pipeline_version: str                          # versions the PROCESSING LOGIC (≠ schema_version)
     processing_started: dt.datetime | None = None
     processing_finished: dt.datetime | None = None
 
@@ -196,6 +199,10 @@ class Bundle(BaseModel):
     plaintext_md: str
     # parquet bytes transferred as multipart file part named "index"
 ```
+
+**Contract notes (from the epic↔PRD gap review):**
+- **Tags/confidence placement (gap #1):** `domain` + `domain_confidence` + `tags` are **doc-level → they live on `Manifest`, not in `CHUNK_SCHEMA`.** Classification runs once per document; per-chunk duplication would be denormalized bloat. The **dispatcher denormalizes `tags` + `domain` into the LanceDB table at merge time** so the scalar pre-filter can scope searches by tag/domain (index-time fan-out, not part of the portable bundle). FR5's `classification_confidence` == this `domain_confidence` (single field; PRD wording aligned).
+- **Two version fields (gap #2):** `schema_version` = the bundle *wire format*; `pipeline_version` = the *processing logic*. Orthogonal. The dispatcher **rejects/quarantines** a bundle whose `schema_version` it doesn't recognize (add to Task 5.1 merge).
 
 **Step 4:** `uv run pytest packages/contracts -v` → PASS. **Commit** `feat(contracts): job + bundle pydantic models`.
 
@@ -406,7 +413,11 @@ GPU block for the worker service:
 - `POST /documents` (multipart) → hash → dedupe check → `store_canonical` → `enqueue` → `202 {job_id, doc_id, status}`. TDD with `httpx.AsyncClient` + `ASGITransport`.
 
 ### Task 1.4: Job API (`job_api.py`)
-- `GET /jobs/next` → `lease_next` → `LeaseResponse` or `204`. `POST /jobs/{id}/heartbeat` → extend lease. `POST /jobs/{id}/result` → accept multipart (`manifest` json + `plaintext` + `index` parquet), hand to dispatcher merge, `complete`. TDD each.
+- `GET /jobs/next` → `lease_next` → `LeaseResponse` or `204`. `POST /jobs/{id}/heartbeat` → extend lease **and stamp `worker_last_seen = now` in a small `worker_status` table (gap #4 liveness)**. `POST /jobs/{id}/result` → accept multipart (`manifest` json + `plaintext` + `index` parquet), hand to dispatcher merge, `complete`. TDD each.
+
+### Task 1.4b: Job status + worker-liveness surface (FR11, gap #4)
+- Add `queued_since` (= `created_at`) to jobs and a `GET /jobs/{id}` returning `{state, queued_since, worker}` where **`worker` is *derived*: `online` if `now - worker_last_seen < WORKER_OFFLINE_THRESHOLD` (e.g. 90s), else `offline`.** The Pi can't observe big boi directly — it *infers* liveness from heartbeat recency.
+- Upload/status responses distinguish the three real states: `QUEUED`+worker-online → "processing shortly"; `QUEUED`+worker-offline → **"🛰️ workstation offline — job waiting (queued Xm ago)"**; `PROCESSING` → in-flight. TDD: fake clock, assert the offline message triggers past threshold.
 
 ### Task 1.5: Wire `app.py` + lifespan
 - Assemble routers; start the lease-sweep background task; graceful shutdown. Smoke test: `uv run uvicorn corpus_pi.app:app` boots.
@@ -432,7 +443,7 @@ GPU block for the worker service:
 ### Task 3.1: Extractor (`extract.py`) — dispatch by type: pandoc/calibre (epub/mobi), pymupdf (simple pdf), marker-pdf (structured pdf). Emit markdown + page map.
 ### Task 3.2: Chunker (`chunk.py`) — split on heading structure, ~500–1000 tok + overlap, carry `heading_path`, `page_start/end`, `token_count`.
 ### Task 3.3: Classifier (`classify.py`) — embedding-centroid nearest-domain default (seed centroids from a few known docs); Qwen2.5-3B zero-shot fallback for low-confidence. Emit `domain` + `domain_confidence` + `tags`.
-### Task 3.4: Seed script — `make seed` to build domain centroids from `data/seeds/<domain>/`.
+### Task 3.4: Seed script — `make seed` to build domain centroids from `data/seeds/<domain>/`. **Also exports + INT8-quantizes the bge-m3 query encoder to ONNX here** (gap #5): this is where the Pi's `QUERY_ENCODER_ONNX` artifact is produced. Default INT8 dynamic quant (`onnxruntime.quantization.quantize_dynamic`); FP16 fallback if INT8 recall drop is unacceptable. Verify exported dim == `EMBED_DIM`.
 
 ---
 
@@ -449,9 +460,9 @@ GPU block for the worker service:
 
 **Review gate:** posting a real bundle merges atomically; a duplicate `content_sha256` is a no-op; LanceDB table gains rows + FTS index built.
 
-### Task 5.1: Dispatcher merge (`dispatcher.py`) — receive bundle → `write_plaintext` → `table.add(parquet)` → build/refresh FTS index → upsert `documents` row → `complete(job)`. Single-writer; wrap in one logical txn (fs + lance + sqlite ordering with rollback on failure).
-### Task 5.2: Query encoder (`encoder.py`) — ONNX bge-m3 on CPU; `encode(query) -> vector`; assert dim == `EMBED_DIM`. TDD dim + determinism.
-### Task 5.3: Hybrid search (`search.py`) — LanceDB BM25 + vector, merge/rerank, return snippet + `doc_id/title/heading_path/page_start/end/score`.
+### Task 5.1: Dispatcher merge (`dispatcher.py`) — receive bundle → **check `manifest.schema_version` (reject/quarantine unknown — gap #2)** → `write_plaintext` → `table.add(parquet)` **with `domain` + `tags` denormalized onto the chunk rows for scalar pre-filtering (gap #1)** → build/refresh FTS index + **scalar index on `domain`/`tags`** → upsert `documents` row → `complete(job)`. Single-writer; wrap in one logical txn (fs + lance + sqlite ordering with rollback on failure).
+### Task 5.2: Query encoder (`encoder.py`) — load the **INT8-quantized ONNX** bge-m3 (from Task 3.4) on CPU; `encode(query) -> vector`; assert dim == `EMBED_DIM`. **Module-level LRU cache keyed on `(query_text, embed_model)` so repeated queries skip re-encoding (gap #6).** TDD dim + determinism + cache-hit path.
+### Task 5.3: Hybrid search (`search.py`) — LanceDB BM25 + vector, **merged via Reciprocal Rank Fusion (RRF), no neural reranker on the Pi**; optional `domain`/`tags` scalar pre-filter; return snippet + `doc_id/title/heading_path/page_start/end/score`. **Perf targets (gap #7, M6): cache-cold full encode+BM25+vector+RRF < 3s @ 1,000 docs on Pi 5; cache-warm < 100ms.** Optional fast-follow: result cache keyed `(query, domain, k)` invalidated by a generation counter bumped on every successful merge.
 
 ---
 
@@ -472,7 +483,8 @@ GPU block for the worker service:
 ### Task 7.1: `pi/Dockerfile` — slim Python 3.12, uv-installed, CPU-only, non-root, healthcheck on `/healthz`.
 ### Task 7.2: `worker/Dockerfile` — CUDA base (matching driver 580/CUDA 13 → use an `nvidia/cuda:12.x`/`pytorch` base compatible w/ sm_120; pin at build), uv-installed, model cache volume.
 ### Task 7.3: Finalize both compose files — volumes, `restart: unless-stopped`, worker GPU reservation, env wiring, Pi service deps.
-### Task 7.4: Full offline-seam integration test — scripted: stop worker, upload (expect QUEUED + "🛰️" surfaced), start worker, assert COMPLETED + searchable.
+### Task 7.4: Full offline-seam integration test — scripted: stop worker, upload (expect QUEUED + "🛰️ workstation offline" surfaced via the FR11 liveness derivation), start worker, assert COMPLETED + searchable.
+### Task 7.5: Doppler-outage acceptance test (R4, gap #3) — bootstrap step writes a cached secrets file (`doppler secrets download --no-file --format env > /tmp/.doppler-cache`, or the fallback loader reads it). Test: **block the Pi from `api.doppler.com` (or invalidate the token), reboot the Pi stack, and assert it (a) boots, (b) loads `PI_BEARER_TOKEN` from cache, (c) `corpus_search` returns results.** This is an explicit checklist item so the offline-secrets path is verified every run, not assumed.
 
 ---
 

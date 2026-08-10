@@ -68,7 +68,7 @@ Representative use cases:
 - **FR2** — Deduplicate by content hash; re-uploading an unchanged document is a no-op.
 - **FR3** — Preserve the original file untouched (canonical library layer).
 - **FR4** — Extract normalized Markdown + structural metadata (headings, page map).
-- **FR5** — Auto-classify each document into a domain with a confidence score and tags.
+- **FR5** — Auto-classify each document into a single domain with a `domain_confidence` score and a list of `tags`. These are **document-level** fields on the bundle `Manifest`; the dispatcher denormalizes `domain`+`tags` onto the index rows at merge time to enable scoped (pre-filtered) search.
 - **FR6** — Chunk documents by structure, preserving heading path and page numbers per chunk.
 - **FR7** — Generate embeddings for each chunk on the GPU workstation.
 - **FR8** — Return a portable **ingest bundle** (manifest + plaintext + indexed chunks) to the Pi.
@@ -76,7 +76,7 @@ Representative use cases:
 ### Job / offline handling
 - **FR9** — Uploads return immediately with a job status; processing is asynchronous.
 - **FR10** — When the workstation is offline, jobs wait in a queue and drain automatically on reconnect.
-- **FR11** — Surface a clear "workstation offline / queued" state to the user.
+- **FR11** — Surface a clear "workstation offline / queued" state to the user. Because the Pi cannot directly observe the workstation, it **derives** liveness from worker-heartbeat recency (`worker_last_seen`) and combines it with each job's `queued_since` to distinguish "processing shortly" from "🛰️ workstation offline — job waiting".
 - **FR12** — Recover from a worker crash mid-job (lease expiry re-queues the work); reprocessing is idempotent.
 
 ### Storage / merge
@@ -98,8 +98,8 @@ Representative use cases:
 - **NFR4 — Security:** LAN-only; authenticated API surface (bearer token); secrets managed in **Doppler**, never committed.
 - **NFR5 — Durability:** No data loss on workstation crash or Pi reboot; index/catalog writes are safe.
 - **NFR6 — Operability:** One command per machine (`make start`) with a containerized default and an automatic local fallback.
-- **NFR7 — Portability of contract:** A shared, versioned schema (bundle + job records) prevents drift between the two ends.
-- **NFR8 — Resource fit:** Runs within a Pi 5 (16GB) footprint — lean dependencies, quantized query encoder, no PyTorch on the Pi.
+- **NFR7 — Portability of contract:** A shared, versioned schema prevents drift between the two ends. Two orthogonal version fields: `schema_version` (bundle wire format) and `pipeline_version` (processing logic). The dispatcher rejects/quarantines bundles whose `schema_version` it doesn't recognize.
+- **NFR8 — Resource fit:** Runs within a Pi 5 (16GB) footprint — lean dependencies, **INT8-quantized ONNX query encoder** (FP16 fallback), **no PyTorch on the Pi** (torch stays on the workstation only).
 
 ## 8. Architecture overview
 
@@ -119,7 +119,7 @@ See [`docs/`](.) for the full C4 set (context, container, deployment, ingest & q
 ### The four layers
 | Layer | What | Where |
 |-------|------|-------|
-| **L1** | Canonical library (untouched originals) | Pi filesystem (Calibre-managed) |
+| **L1** | Canonical library (untouched originals) | Pi filesystem — **Corpus Hub-managed** at `library/<doc_id>/<filename>` |
 | **L2** | Normalized plaintext (Markdown + frontmatter) | produced on workstation, stored on Pi |
 | **L3** | Vector + keyword index (hybrid) | produced on workstation, merged into Pi's LanceDB |
 | **L4** | MCP retrieval server | Pi — always on |
@@ -131,7 +131,7 @@ See [`docs/`](.) for the full C4 set (context, container, deployment, ingest & q
 - **M3** — With the workstation offline: uploads still succeed (queued) and existing-corpus queries still return results.
 - **M4** — A worker killed mid-job results in zero lost/corrupted data; the job completes after reconnect.
 - **M5** — At least one third-party agent (Claude Code) successfully queries the corpus over MCP.
-- **M6** — Query latency stays interactive at target corpus size (~1k+ documents).
+- **M6** — Query latency stays interactive at ~1k+ documents: cache-cold full encode + BM25 + vector + RRF completes **< 3s** on Pi 5; cache-warm (repeated query) **< 100ms**.
 
 ## 10. Hardware
 

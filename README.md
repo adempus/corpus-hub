@@ -51,7 +51,7 @@ make diagrams        # or: bash docs/render.sh
 
 | Layer | What | Where |
 |-------|------|-------|
-| **L1** | Canonical library (untouched originals) | Pi filesystem (Calibre-managed) |
+| **L1** | Canonical library (untouched originals) | Pi filesystem — Corpus Hub-managed (`library/<doc_id>/`); Calibre optional import source |
 | **L2** | Normalized plaintext (Markdown + frontmatter) | produced on big boi, stored on Pi |
 | **L3** | Vector + keyword index (hybrid BM25 + embeddings) | produced on big boi, merged into Pi's LanceDB |
 | **L4** | MCP retrieval server (`corpus_search` / `get` / `list`) | Pi — always on |
